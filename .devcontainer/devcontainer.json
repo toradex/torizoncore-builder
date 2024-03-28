@@ -18,9 +18,7 @@
 			// Set *default* container specific settings.json values on container create.
 			"settings": {
 				"terminal.integrated.defaultProfile.linux": "bash",
-				"python.pythonPath": "/usr/bin/python3",
-				"python.linting.enabled": true,
-				"python.linting.pylintEnabled": true
+				"python.defaultInterpreterPath": "/usr/bin/python3"
 			},
 
 			// Add the IDs of extensions you want installed when the container is created.
@@ -28,6 +26,7 @@
 				"ms-azuretools.vscode-docker",
 				"redhat.vscode-yaml",
 				"ms-python.python",
+				"ms-python.pylint",
 				"eamodio.gitlens",
 				"github.copilot",
 				"jetmartin.bats"
