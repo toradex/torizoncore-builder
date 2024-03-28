@@ -2,6 +2,7 @@
 Backend handling for build subcommand
 """
 
+import json
 import os
 import copy
 import logging
@@ -228,6 +229,44 @@ def fetch_remote(url, fname=None, cksum=None, download_dir=None):
 
     return out_fname, is_temp
 
+def _load_config_file_yaml(config_path):
+    """
+    Load the YAML configuration file
+    """
+
+    # Load the YAML configuration file (user-supplied):
+    with open(config_path) as file:
+        try:
+            config = yaml.load(file, Loader=yaml.FullLoader)
+            return config
+
+        except yaml.YAMLError as ex:
+            error_exc = ParseError(getattr(ex, "problem", "parsing error"))
+            error_exc.set_source(file=config_path)
+            if hasattr(ex, "problem_mark"):
+                mark = getattr(ex, "problem_mark")
+                error_exc.set_source(line=mark.line, column=mark.column)
+            raise error_exc
+
+
+def _load_config_file_json(config_path):
+    """
+    Load the JSON configuration file
+    """
+
+    # Load the JSON configuration file (user-supplied):
+    with open(config_path) as file:
+        try:
+            config = json.load(file)
+            return config
+
+        except json.JSONDecodeError as ex:
+            error_exc = ParseError(getattr(ex, "msg", "parsing error"))
+            error_exc.set_source(file=config_path)
+            if hasattr(ex, "doc"):
+                error_exc.set_source(line=ex.doc)
+            raise error_exc
+
 
 def parse_config_file(config_path, schema_path=DEFAULT_SCHEMA_FILE, substs=None):
     """Parse a configuration file against the expected schema
@@ -242,18 +281,11 @@ def parse_config_file(config_path, schema_path=DEFAULT_SCHEMA_FILE, substs=None)
         raise PathNotExistError(
             f"Build configuration file '{config_path}' does not exist.")
 
-    # Load the YAML configuration file (user-supplied):
-    with open(config_path) as file:
-        try:
-            config = yaml.load(file, Loader=yaml.FullLoader)
 
-        except yaml.YAMLError as ex:
-            error_exc = ParseError(getattr(ex, "problem", "parsing error"))
-            error_exc.set_source(file=config_path)
-            if hasattr(ex, "problem_mark"):
-                mark = getattr(ex, "problem_mark")
-                error_exc.set_source(line=mark.line, column=mark.column)
-            raise error_exc
+    if config_path.endswith(".json"):
+        config = _load_config_file_json(config_path)
+    elif config_path.endswith(".yaml") or config_path.endswith(".yml"):
+        config = _load_config_file_yaml(config_path)
 
     # Make variable substitutions.
     if substs is not None:
