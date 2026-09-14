@@ -12,6 +12,7 @@ import re
 import sys
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from fnmatch import fnmatchcase
 from io import BytesIO, TextIOWrapper
@@ -106,6 +107,7 @@ COMMIT_CHECK_TIMEOUT = int(os.environ.get("COMMIT_CHECK_TIMEOUT", "60"))
 FETCH_READ_TIMEOUT = int(os.environ.get("FETCH_READ_TIMEOUT", "60"))
 UPDATE_DESC_TIMEOUT = int(os.environ.get("UPDATE_DESC_TIMEOUT", "60"))
 UPLOAD_DELTA_TIMEOUT = int(os.environ.get("UPLOAD_DELTA_TIMEOUT", "240"))
+PARALLEL_DOWNLOADS = int(os.environ.get("PARALLEL_DOWNLOADS", "10"))
 
 
 def load_metadata(fname, ftype=None, maxlen=DEFAULT_METADATA_MAXLEN):
@@ -1109,15 +1111,29 @@ def fetch_imgrepo_metadata(repo_url, dest_dir, access_token=None, verbose=True):
             length=fmeta["length"],
             access_token=access_token)
 
-    # Fetch the various versions of the "root.json" file:
+    # Fetch the various versions of the "root.json" file in parallel:
     last_root_version = snapshot_meta["signed"]["meta"]["root.json"]["version"]
+    downloads = []
     for version in range(1, last_root_version + 1):
         fname = f"{version}.root.json"
         url = urljoin(repo_url + "/", f"api/v1/user_repo/{fname}")
-        if verbose:
-            log.info(f"Fetching '{fname}'")
-        # It seems we cannot check the SHA and length of previous root data.
-        fetch_validate(url, fname, dest_dir, access_token=access_token)
+        downloads.append((url, fname))
+
+    if verbose:
+        log.info(f"Fetching {len(downloads)} root metadata file(s) in parallel")
+
+    # It seems we cannot check the SHA and length of previous root data.
+    total = len(downloads)
+    with ThreadPoolExecutor(max_workers=PARALLEL_DOWNLOADS) as executor:
+        futures = {
+            executor.submit(fetch_validate, url, fname, dest_dir,
+                            access_token=access_token): fname
+            for url, fname in downloads
+        }
+        for count, future in enumerate(as_completed(futures), 1):
+            future.result()
+            if verbose:
+                log.info(f"Fetched root metadata ({count} of {total})")
 
 
 def fetch_director_metadata(lockbox_name, director_url, dest_dir, access_token=None):
@@ -1207,21 +1223,32 @@ def fetch_director_metadata(lockbox_name, director_url, dest_dir, access_token=N
         top_level_root_file, ftype="json", maxlen=DEFAULT_METADATA_MAXLEN)
     latest_root_version = top_level_root["parsed"]["signed"]["version"]
 
-    for version_index in range(0, latest_root_version):
-        version = version_index + 1
+    downloads = []
+    for version in range(1, latest_root_version + 1):
         fname = f"{version}.root.json"
         url = urljoin(director_url + "/", f"api/v1/admin/repo/{fname}")
-        try:
-            log.info(f"Fetching ('{str(version)}' of '{str(latest_root_version)}') '{fname}'")
-            fetch_validate(
-                url, fname, dest_dir,
-                sha256=None, length=None, access_token=access_token)
+        downloads.append((url, fname))
 
-        except FetchError as exc:
-            log.warning(str(exc))
-            # pylint: disable-next=raise-missing-from
-            raise TorizonCoreBuilderError(
-                f"Error: Could not fetch metadata file '{fname}' from server")
+    log.info(f"Fetching {len(downloads)} director root metadata file(s) in parallel")
+
+    total = len(downloads)
+    with ThreadPoolExecutor(max_workers=PARALLEL_DOWNLOADS) as executor:
+        futures = {
+            executor.submit(fetch_validate, url, fname, dest_dir,
+                            sha256=None, length=None,
+                            access_token=access_token): fname
+            for url, fname in downloads
+        }
+        for count, future in enumerate(as_completed(futures), 1):
+            fname = futures[future]
+            try:
+                future.result()
+            except FetchError as exc:
+                log.warning(str(exc))
+                # pylint: disable-next=raise-missing-from
+                raise TorizonCoreBuilderError(
+                    f"Error: Could not fetch metadata file '{fname}' from server")
+            log.info(f"Fetched director root metadata ({count} of {total})")
 
 def load_imgrepo_targets(source_dir, verbose=True):
     """Load Uptane lockbox image repo targets metadata (top-level and delegations)"""
